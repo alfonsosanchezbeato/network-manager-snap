@@ -1,9 +1,6 @@
 name: Spread tests
 
 on:
-  push:
-    branches:
-      - snap-22
   pull_request:
     branches:
       - snap-22
