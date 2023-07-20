@@ -147,6 +147,11 @@ _switch_connectivity_check() {
     _replace_file_if_diff "$path" "$content"
 }
 
+# Sends to netplan dbus service
+dbus_nplan_send() {
+    dbus-send  --system --type=method_call --print-reply --dest=io.netplan.Netplan "$@"
+}
+
 # Set/unset NM as default netplan renderer
 # $1: true/false
 _switch_defaultrenderer() {
@@ -156,12 +161,21 @@ _switch_defaultrenderer() {
     # We let netplan do whatever is needed.
     rm -f "$SNAP_DATA"/conf.d/disable-ethernet.conf
 
+    # Create a configuration object
+    cfg_o=$(dbus_nplan_send /io/netplan/Netplan io.netplan.Netplan.Config |
+                cut -s -d \" -f2)
+    if dbus_nplan_send "$cfg_o" io.netplan.Netplan.Config.Get |
+        grep -q 'renderer: NetworkManager'
+    then nm_renders=true
+    else nm_renders=false
+    fi
+
+    # Note that both apply and cancel remove the configuration object
     if [ "$1" = true ] || [ "$1" = yes ]; then
-        if [ ! -f "$path" ]; then
-            printf "network:\n  renderer: NetworkManager\n" > "$path"
-            dbus-send --system --type=method_call --print-reply \
-                      --dest=io.netplan.Netplan /io/netplan/Netplan \
-                      io.netplan.Netplan.Apply
+        if [ "$nm_renders" = "false" ]; then
+            dbus_nplan_send "$cfg_o" io.netplan.Netplan.Config.Set \
+                            string:"network.renderer=NetworkManager" string:"$path"
+            dbus_nplan_send "$cfg_o" io.netplan.Netplan.Config.Apply
             # Flush ips of devices that now we control. Workaround
             # until LP:#1870561 is fixed.
             for conn_f in /run/NetworkManager/system-connections/*; do
@@ -170,12 +184,15 @@ _switch_defaultrenderer() {
                     ip address flush dev "$ifname" || true
                 fi
             done
+        else
+            dbus_nplan_send "$cfg_o" io.netplan.Netplan.Config.Cancel
         fi
-    elif [ -f "$path" ]; then
-        rm -f "$path"
-        dbus-send --system --type=method_call --print-reply \
-                  --dest=io.netplan.Netplan /io/netplan/Netplan \
-                  io.netplan.Netplan.Apply
+    elif [ "$nm_renders" = "true" ]; then
+        dbus_nplan_send "$cfg_o" io.netplan.Netplan.Config.Set \
+                            string:"network.renderer=null" string:"$path"
+        dbus_nplan_send "$cfg_o" io.netplan.Netplan.Config.Apply
+    else
+        dbus_nplan_send "$cfg_o" io.netplan.Netplan.Config.Cancel
     fi
 }
 
